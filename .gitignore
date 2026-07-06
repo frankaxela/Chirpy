@@ -20,6 +20,12 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Local build artifacts
+/chirpy
+/out
+/server
+/server_test
+
 # Go workspace file
 go.work
 go.work.sum
