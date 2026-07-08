@@ -168,7 +168,6 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// In this simple implementation we don't persist the user. Return created.
 	respondWithJSON(w, http.StatusCreated, struct {
 		Id        string `json:"id"`
 		CreatedAt string `json:"created_at"`
