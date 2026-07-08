@@ -1,27 +1,56 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+	"time"
+
+	"github.com/frankaxela/chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries      *database.Queries
+	platform       string
 }
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal("Error connecting to database:", err)
+	}
+	defer db.Close()
+	dbQueries := database.New(db)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/healthz", healthzHandler)
-	apiCfg := &apiConfig{}
+	apiCfg := &apiConfig{
+		dbQueries: dbQueries,
+		platform:  platform,
+	}
 	mux.Handle("GET /app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 
 	mux.HandleFunc("GET /admin/metrics", apiCfg.fileserverHitsHandler)
-	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
+	if platform == "dev" {
+		mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
+	} else {
+		mux.HandleFunc("POST /admin/reset", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "403 Forbidden", http.StatusForbidden)
+		})
+	}
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 
 	server := &http.Server{
 		Addr:    ":8080",
@@ -45,6 +74,11 @@ func (cfg *apiConfig) fileserverHitsHandler(w http.ResponseWriter, r *http.Reque
 
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
+	err := cfg.dbQueries.DeleteAllUsers(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed deleting all users")
+		return
+	}
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -110,4 +144,35 @@ func respondWithJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	w.Write(data)
+}
+
+func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
+	type req struct {
+		Email string `json:"email"`
+	}
+
+	var p req
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if strings.TrimSpace(p.Email) == "" {
+		respondWithError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	user, err := cfg.dbQueries.CreateUser(r.Context(), p.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create user")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, struct {
+		Id        string `json:"id"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+		Email     string `json:"email"`
+	}{Id: user.ID.String(), CreatedAt: user.CreatedAt.Format(time.RFC3339), UpdatedAt: user.UpdatedAt.Format(time.RFC3339), Email: user.Email})
+
 }
