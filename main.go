@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -72,8 +73,24 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondWithJSON(w, http.StatusOK, struct {
-		Valid bool `json:"valid"`
-	}{Valid: true})
+		CleanedBody string `json:"cleaned_body"`
+	}{CleanedBody: cleanChirp(params.Body)})
+}
+
+var profaneWords = map[string]struct{}{
+	"kerfuffle": {},
+	"sharbert":  {},
+	"fornax":    {},
+}
+
+func cleanChirp(body string) string {
+	words := strings.Split(body, " ")
+	for i, word := range words {
+		if _, ok := profaneWords[strings.ToLower(word)]; ok {
+			words[i] = "****"
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
