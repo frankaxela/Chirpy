@@ -12,7 +12,7 @@ import (
 
 type Chirp struct {
 	ID        uuid.UUID
-	Body      string `json:"body"`
+	Body      string
 	UserID    uuid.UUID
 	CreatedAt time.Time
 	UpdatedAt time.Time
