@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/frankaxela/chirpy/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -49,7 +51,7 @@ func main() {
 			http.Error(w, "403 Forbidden", http.StatusForbidden)
 		})
 	}
-	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 
 	server := &http.Server{
@@ -90,9 +92,10 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 
 const maxChirpLength = 140
 
-func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
+		Body   string `json:"body"`
+		UserId string `json:"user_id"`
 	}
 
 	var params parameters
@@ -106,9 +109,29 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, struct {
-		CleanedBody string `json:"cleaned_body"`
-	}{CleanedBody: cleanChirp(params.Body)})
+	// parse user id into uuid
+	uid, err := uuid.Parse(params.UserId)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "invalid user_id")
+		return
+	}
+
+	chirp, err := cfg.dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   params.Body,
+		UserID: uid,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create chirp")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, struct {
+		Id        string `json:"id"`
+		Body      string `json:"body"`
+		UserId    string `json:"user_id"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+	}{Id: chirp.ID.String(), Body: chirp.Body, UserId: chirp.UserID.String(), CreatedAt: chirp.CreatedAt.Format(time.RFC3339), UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339)})
 }
 
 var profaneWords = map[string]struct{}{
