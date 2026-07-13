@@ -492,13 +492,19 @@ func (cfg *apiConfig) updateUserToChirpyRedHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
-	_, err = cfg.dbQueries.GetUserByID(r.Context(), uuid.MustParse(req.Data.UserID))
+	userID, err := uuid.Parse(req.Data.UserID)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	_, err = cfg.dbQueries.GetUserByID(r.Context(), userID)
 	if err != nil {
 		respondWithError(w, http.StatusNotFound, "User not found")
 		return
 	}
 
-	err = cfg.dbQueries.UpdateUserToChirpyRed(r.Context(), uuid.MustParse(req.Data.UserID))
+	err = cfg.dbQueries.UpdateUserToChirpyRed(r.Context(), userID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to update user to Chirpy Red")
 		return
