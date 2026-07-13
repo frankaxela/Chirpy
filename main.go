@@ -58,10 +58,13 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpHandler)
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("PUT /api/users", apiCfg.updateUserHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.loginHandler)
-	mux.HandleFunc("POST /api/refresh", apiCfg.RefreshAccessToken)
-	mux.HandleFunc("POST /api/revoke", apiCfg.RevokeRefreshToken)
+	mux.HandleFunc("POST /api/refresh", apiCfg.RefreshAccessTokenHandler)
+	mux.HandleFunc("POST /api/revoke", apiCfg.RevokeRefreshTokenHandler)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.updateUserToChirpyRedHandler)
 
 	server := &http.Server{
 		Addr:    ":8080",
@@ -230,6 +233,46 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid chirp ID")
+		return
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if token == "" {
+		respondWithError(w, http.StatusUnauthorized, "Authorization header is missing")
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.tokenSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid token")
+		return
+	}
+
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Chirp not found")
+		return
+	}
+
+	if chirp.UserID != userID {
+		respondWithError(w, http.StatusForbidden, "You are not allowed to delete this chirp")
+		return
+	}
+
+	err = cfg.dbQueries.DeleteChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to delete chirp")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
 	type req struct {
 		Password string `json:"password"`
@@ -279,6 +322,54 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 
 }
 
+func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) {
+	type req struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+
+	var p req
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if token == "" {
+		respondWithError(w, http.StatusUnauthorized, "Authorization header is missing")
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.tokenSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid token")
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(p.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to hash password")
+		return
+	}
+
+	user, err := cfg.dbQueries.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:             userID,
+		Email:          p.Email,
+		HashedPassword: hashedPassword,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to update user")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, userResponse{
+		Id:        user.ID.String(),
+		CreatedAt: user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		Email:     user.Email,
+	})
+}
+
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	type req struct {
 		Email    string `json:"email"`
@@ -323,12 +414,13 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:    user.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:    user.UpdatedAt.Format(time.RFC3339),
 		Email:        user.Email,
+		IsChirpyRed:  user.IsChirpyRed,
 		Token:        token,
 		RefreshToken: refreshToken,
 	})
 }
 
-func (cfg *apiConfig) RefreshAccessToken(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) RefreshAccessTokenHandler(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Invalid refresh token")
@@ -364,7 +456,7 @@ func (cfg *apiConfig) RefreshAccessToken(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (cfg *apiConfig) RevokeRefreshToken(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) RevokeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Invalid refresh token")
@@ -374,6 +466,41 @@ func (cfg *apiConfig) RevokeRefreshToken(w http.ResponseWriter, r *http.Request)
 	err = cfg.dbQueries.RevokeRefreshToken(r.Context(), refreshToken)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to revoke refresh token")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) updateUserToChirpyRedHandler(w http.ResponseWriter, r *http.Request) {
+	type body struct {
+		EventType string `json:"event"`
+		Data      struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+
+	var req body
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.EventType != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	_, err = cfg.dbQueries.GetUserByID(r.Context(), uuid.MustParse(req.Data.UserID))
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "User not found")
+		return
+	}
+
+	err = cfg.dbQueries.UpdateUserToChirpyRed(r.Context(), uuid.MustParse(req.Data.UserID))
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to update user to Chirpy Red")
 		return
 	}
 
@@ -393,6 +520,7 @@ type userResponse struct {
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
 	Email        string `json:"email"`
+	IsChirpyRed  bool   `json:"is_chirpy_red"`
 	Token        string `json:"token"`
 	RefreshToken string `json:"refresh_token"`
 }
