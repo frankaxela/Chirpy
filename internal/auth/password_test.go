@@ -247,3 +247,106 @@ func TestGetBearerTokenLowercaseSchemeRejected(t *testing.T) {
 		t.Errorf("expected empty token for lowercase scheme, got %q", token)
 	}
 }
+
+func TestGetAPIKeyValidHeader(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "ApiKey my-api-key-123")
+
+	key, err := GetAPIKey(headers)
+	if err != nil {
+		t.Fatalf("GetAPIKey returned error: %v", err)
+	}
+	if key != "my-api-key-123" {
+		t.Errorf("expected key %q, got %q", "my-api-key-123", key)
+	}
+}
+
+func TestGetAPIKeyPreservesKeyWithSpaces(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "ApiKey part1 part2")
+
+	key, err := GetAPIKey(headers)
+	if err != nil {
+		t.Fatalf("GetAPIKey returned error: %v", err)
+	}
+	if key != "part1 part2" {
+		t.Errorf("expected key %q, got %q", "part1 part2", key)
+	}
+}
+
+func TestGetAPIKeyEmptyKeyAfterScheme(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "ApiKey ")
+
+	key, err := GetAPIKey(headers)
+	if err != nil {
+		t.Fatalf("GetAPIKey returned error: %v", err)
+	}
+	if key != "" {
+		t.Errorf("expected empty key, got %q", key)
+	}
+}
+
+func TestGetAPIKeyMissingHeader(t *testing.T) {
+	headers := http.Header{}
+
+	key, err := GetAPIKey(headers)
+	if err == nil {
+		t.Fatal("expected an error for a missing Authorization header, got nil")
+	}
+	if key != "" {
+		t.Errorf("expected empty key for missing header, got %q", key)
+	}
+}
+
+func TestGetAPIKeyEmptyHeaderValue(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "")
+
+	key, err := GetAPIKey(headers)
+	if err == nil {
+		t.Fatal("expected an error for an empty Authorization header, got nil")
+	}
+	if key != "" {
+		t.Errorf("expected empty key for empty header, got %q", key)
+	}
+}
+
+func TestGetAPIKeyWrongScheme(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer my-api-key-123")
+
+	key, err := GetAPIKey(headers)
+	if err == nil {
+		t.Fatal("expected an error for a non-ApiKey Authorization header, got nil")
+	}
+	if key != "" {
+		t.Errorf("expected empty key for wrong scheme, got %q", key)
+	}
+}
+
+func TestGetAPIKeyMissingSpaceAfterScheme(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "ApiKeymy-api-key-123")
+
+	key, err := GetAPIKey(headers)
+	if err == nil {
+		t.Fatal("expected an error when ApiKey is not followed by a space, got nil")
+	}
+	if key != "" {
+		t.Errorf("expected empty key, got %q", key)
+	}
+}
+
+func TestGetAPIKeyLowercaseSchemeRejected(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "apikey my-api-key-123")
+
+	key, err := GetAPIKey(headers)
+	if err == nil {
+		t.Fatal("expected an error for lowercase apikey scheme, got nil")
+	}
+	if key != "" {
+		t.Errorf("expected empty key for lowercase scheme, got %q", key)
+	}
+}
