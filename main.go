@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -146,8 +147,10 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	chirp, err := cfg.dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
-		Body:   params.Body,
-		UserID: userID,
+		Body:      params.Body,
+		UserID:    userID,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to create chirp")
@@ -155,7 +158,11 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusCreated, chirpResponse{
-		Id: chirp.ID.String(), Body: chirp.Body, UserId: chirp.UserID.String(), CreatedAt: chirp.CreatedAt.Format(time.RFC3339), UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339)})
+		Id:        chirp.ID.String(),
+		Body:      chirp.Body,
+		UserId:    chirp.UserID.String(),
+		CreatedAt: chirp.CreatedAt.Format(time.RFC3339Nano),
+		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339Nano)})
 }
 
 var profaneWords = map[string]struct{}{
@@ -194,21 +201,52 @@ func respondWithJSON(w http.ResponseWriter, code int, payload any) {
 }
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.dbQueries.GetChirps(r.Context())
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve chirps")
-		return
+	var response []chirpResponse
+
+	authorID := r.URL.Query().Get("author_id")
+	if authorID != "" {
+		// Filter chirps by author ID
+		filteredChirps, err := cfg.dbQueries.GetChirpsByAuthor(r.Context(), uuid.MustParse(authorID))
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Failed to retrieve chirps")
+			return
+		}
+		for _, chirp := range filteredChirps {
+			response = append(response, chirpResponse{
+				Id:        chirp.ID.String(),
+				Body:      chirp.Body,
+				UserId:    chirp.UserID.String(),
+				CreatedAt: chirp.CreatedAt.Format(time.RFC3339Nano),
+				UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339Nano),
+			})
+		}
+	} else {
+		// Get all chirps
+		chirps, err := cfg.dbQueries.GetChirps(r.Context())
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Failed to retrieve chirps")
+			return
+		}
+		for _, chirp := range chirps {
+			response = append(response, chirpResponse{
+				Id:        chirp.ID.String(),
+				Body:      chirp.Body,
+				UserId:    chirp.UserID.String(),
+				CreatedAt: chirp.CreatedAt.Format(time.RFC3339Nano),
+				UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339Nano),
+			})
+		}
 	}
 
-	var response []chirpResponse
-	for _, chirp := range chirps {
-		response = append(response, chirpResponse{
-			Id:        chirp.ID.String(),
-			Body:      chirp.Body,
-			UserId:    chirp.UserID.String(),
-			CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
+	sorting := r.URL.Query().Get("sort")
+	if sorting == "desc" {
+		// Sort chirps in descending order by created_at
+		sort.Slice(response, func(i, j int) bool {
+			return response[i].CreatedAt > response[j].CreatedAt
 		})
+	} else if sorting != "" && sorting != "asc" {
+		respondWithError(w, http.StatusBadRequest, "Invalid sort parameter. Use 'asc' or 'desc'.")
+		return
 	}
 
 	respondWithJSON(w, http.StatusOK, response)
@@ -232,8 +270,8 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 		Id:        chirp.ID.String(),
 		Body:      chirp.Body,
 		UserId:    chirp.UserID.String(),
-		CreatedAt: chirp.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339),
+		CreatedAt: chirp.CreatedAt.Format(time.RFC3339Nano),
+		UpdatedAt: chirp.UpdatedAt.Format(time.RFC3339Nano),
 	})
 }
 
@@ -319,8 +357,8 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 
 	respondWithJSON(w, http.StatusCreated, userResponse{
 		Id:        user.ID.String(),
-		CreatedAt: user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		CreatedAt: user.CreatedAt.Format(time.RFC3339Nano),
+		UpdatedAt: user.UpdatedAt.Format(time.RFC3339Nano),
 		Email:     user.Email,
 	})
 
@@ -368,8 +406,8 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) 
 
 	respondWithJSON(w, http.StatusOK, userResponse{
 		Id:        user.ID.String(),
-		CreatedAt: user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		CreatedAt: user.CreatedAt.Format(time.RFC3339Nano),
+		UpdatedAt: user.UpdatedAt.Format(time.RFC3339Nano),
 		Email:     user.Email,
 	})
 }
@@ -415,8 +453,8 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 
 	respondWithJSON(w, http.StatusOK, userResponse{
 		Id:           user.ID.String(),
-		CreatedAt:    user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:    user.UpdatedAt.Format(time.RFC3339),
+		CreatedAt:    user.CreatedAt.Format(time.RFC3339Nano),
+		UpdatedAt:    user.UpdatedAt.Format(time.RFC3339Nano),
 		Email:        user.Email,
 		IsChirpyRed:  user.IsChirpyRed,
 		Token:        token,

@@ -4,14 +4,18 @@ VALUES (
     gen_random_uuid(),
     $1,
     $2,
-    now(),
-    now()
+    $3,
+    $4
 )
 RETURNING *;
 
 -- name: GetChirps :many
 SELECT * FROM chirps
 ORDER BY created_at ASC;
+
+-- name: GetChirpsByAuthor :many
+SELECT * FROM chirps
+WHERE user_id = $1;
 
 -- name: GetChirp :one
 SELECT * FROM chirps
